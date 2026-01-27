@@ -1,0 +1,40 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0e0e0e;
+  color: #fff;
+}
+
+header {
+  text-align: center;
+  padding: 2rem 1rem;
+}
+
+#music-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.card {
+  background: #1a1a1a;
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: center;
+}
+
+.card img {
+  width: 100%;
+}
+
+.card h3 {
+  margin: 0.5rem 0 0;
+}
+
+.links a {
+  margin: 0.5rem;
+  display: inline-block;
+  color: #1db954;
+  text-decoration: none;
+}
