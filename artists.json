@@ -1,0 +1,18 @@
+{
+  "artists": [
+    {
+      "artist": "BNick",
+      "spotify": "https://open.spotify.com/artist/YOUR_SPOTIFY_ID",
+      "youtube": "https://youtube.com/@bnick",
+      "appleMusic": "https://music.apple.com/artist/YOUR_APPLE_ID",
+      "audiomack": "https://audiomack.com/bnick"
+    }
+  ],
+  "settings": {
+    "updateInterval": "6h",
+    "maxTopSongs": 3,
+    "maxLatestPerArtist": 5,
+    "spotifyWeight": 0.7,
+    "youtubeWeight": 0.3
+  }
+}
