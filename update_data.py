@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-A-lex Artist Hub - Data Update Script
-Fetches data from Spotify and YouTube APIs and generates cache.json
+A-lex Artist Hub - Data Automation Script
+Fetches artist data from Spotify, YouTube and generates cache.json
 """
 
 import os
@@ -9,268 +9,296 @@ import json
 import requests
 from datetime import datetime
 from typing import List, Dict, Optional
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
+import base64
+import re
 
-class ArtistDataUpdater:
+class ArtistHubAutomation:
     def __init__(self):
-        # Initialize Spotify client
-        self.spotify = spotipy.Spotify(
-            auth_manager=SpotifyClientCredentials(
-                client_id=os.environ.get('SPOTIFY_CLIENT_ID'),
-                client_secret=os.environ.get('SPOTIFY_CLIENT_SECRET')
-            )
-        )
+        self.config = self.load_config()
+        self.spotify_token = None
+        self.youtube_api_key = os.getenv('YOUTUBE_API_KEY', '')
         
-        # YouTube API key
-        self.youtube_api_key = os.environ.get('YOUTUBE_API_KEY')
+    def load_config(self) -> Dict:
+        """Load artists configuration"""
+        with open('artists.json', 'r') as f:
+            return json.load(f)
+    
+    def get_spotify_token(self) -> str:
+        """Get Spotify API access token"""
+        client_id = os.getenv('SPOTIFY_CLIENT_ID')
+        client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
         
-        # Load artist configuration
-        with open('data/artists.json', 'r') as f:
-            self.config = json.load(f)
-    
-    def extract_spotify_id(self, url: str) -> Optional[str]:
-        """Extract Spotify artist ID from URL"""
-        if '/artist/' in url:
-            return url.split('/artist/')[-1].split('?')[0]
-        return None
-    
-    def extract_youtube_channel_id(self, url: str) -> Optional[str]:
-        """Extract YouTube channel ID from URL"""
-        # This is a simplified version - you may need to use YouTube API
-        # to resolve @username to channel ID
-        if '@' in url:
-            username = url.split('@')[-1].strip('/')
-            return self.resolve_youtube_username(username)
-        elif '/channel/' in url:
-            return url.split('/channel/')[-1].split('?')[0]
-        return None
-    
-    def resolve_youtube_username(self, username: str) -> Optional[str]:
-        """Resolve YouTube username to channel ID using API"""
-        if not self.youtube_api_key:
-            return None
-            
-        try:
-            url = f'https://www.googleapis.com/youtube/v3/search'
-            params = {
-                'part': 'snippet',
-                'q': username,
-                'type': 'channel',
-                'maxResults': 1,
-                'key': self.youtube_api_key
-            }
-            response = requests.get(url, params=params)
-            data = response.json()
-            
-            if 'items' in data and len(data['items']) > 0:
-                return data['items'][0]['snippet']['channelId']
-        except Exception as e:
-            print(f"Error resolving YouTube username: {e}")
-        
-        return None
-    
-    def get_artist_data(self, spotify_url: str) -> Optional[Dict]:
-        """Fetch artist data from Spotify"""
-        artist_id = self.extract_spotify_id(spotify_url)
-        if not artist_id:
+        if not client_id or not client_secret:
+            print("⚠️  Spotify credentials not found in environment variables")
             return None
         
-        try:
-            artist = self.spotify.artist(artist_id)
-            return {
-                'id': artist_id,
-                'name': artist['name'],
-                'image': artist['images'][0]['url'] if artist['images'] else None,
-                'followers': artist['followers']['total'],
-                'genres': artist['genres']
-            }
-        except Exception as e:
-            print(f"Error fetching artist data: {e}")
-            return None
-    
-    def get_artist_tracks(self, artist_id: str, limit: int = 10) -> List[Dict]:
-        """Fetch artist's latest tracks from Spotify"""
-        try:
-            # Get artist's albums
-            albums = self.spotify.artist_albums(
-                artist_id,
-                album_type='album,single',
-                limit=10
-            )
-            
-            tracks = []
-            seen_track_names = set()
-            
-            for album in albums['items']:
-                album_tracks = self.spotify.album_tracks(album['id'])
-                
-                for track in album_tracks['items']:
-                    # Avoid duplicates
-                    if track['name'] in seen_track_names:
-                        continue
-                    
-                    seen_track_names.add(track['name'])
-                    
-                    # Get full track details for popularity
-                    full_track = self.spotify.track(track['id'])
-                    
-                    tracks.append({
-                        'id': track['id'],
-                        'title': track['name'],
-                        'coverArt': album['images'][0]['url'] if album['images'] else None,
-                        'releaseDate': album['release_date'],
-                        'popularity': full_track['popularity'],
-                        'spotifyUrl': full_track['external_urls']['spotify']
-                    })
-                    
-                    if len(tracks) >= limit:
-                        break
-                
-                if len(tracks) >= limit:
-                    break
-            
-            # Sort by release date (newest first)
-            tracks.sort(key=lambda x: x['releaseDate'], reverse=True)
-            return tracks[:limit]
-            
-        except Exception as e:
-            print(f"Error fetching tracks: {e}")
-            return []
-    
-    def search_youtube_video(self, track_name: str, artist_name: str) -> Optional[Dict]:
-        """Search for track on YouTube"""
-        if not self.youtube_api_key:
-            return None
+        auth_string = f"{client_id}:{client_secret}"
+        auth_bytes = auth_string.encode('utf-8')
+        auth_base64 = base64.b64encode(auth_bytes).decode('utf-8')
         
-        try:
-            url = 'https://www.googleapis.com/youtube/v3/search'
-            params = {
-                'part': 'snippet',
-                'q': f'{artist_name} {track_name} official',
-                'type': 'video',
-                'maxResults': 1,
-                'key': self.youtube_api_key
-            }
-            
-            response = requests.get(url, params=params)
-            data = response.json()
-            
-            if 'items' in data and len(data['items']) > 0:
-                video = data['items'][0]
-                video_id = video['id']['videoId']
-                
-                # Get video statistics
-                stats_url = 'https://www.googleapis.com/youtube/v3/videos'
-                stats_params = {
-                    'part': 'statistics',
-                    'id': video_id,
-                    'key': self.youtube_api_key
-                }
-                
-                stats_response = requests.get(stats_url, params=stats_params)
-                stats_data = stats_response.json()
-                
-                if 'items' in stats_data and len(stats_data['items']) > 0:
-                    stats = stats_data['items'][0]['statistics']
-                    return {
-                        'url': f'https://youtube.com/watch?v={video_id}',
-                        'views': int(stats.get('viewCount', 0))
-                    }
-        except Exception as e:
-            print(f"Error searching YouTube: {e}")
-        
-        return None
-    
-    def search_apple_music(self, track_name: str, artist_name: str) -> Optional[str]:
-        """Search for track on Apple Music"""
-        try:
-            # Apple Music API requires authentication
-            # For now, we'll construct a search URL
-            # In production, you'd use the Apple Music API
-            search_query = f"{artist_name} {track_name}".replace(' ', '+')
-            return f"https://music.apple.com/search?term={search_query}"
-        except Exception as e:
-            print(f"Error searching Apple Music: {e}")
-            return None
-    
-    def update_all_artists(self):
-        """Update data for all configured artists"""
-        artists_data = []
-        
-        for artist_config in self.config['artists']:
-            print(f"\n📀 Processing {artist_config['artist']}...")
-            
-            # Get artist info from Spotify
-            artist_data = self.get_artist_data(artist_config['spotify'])
-            if not artist_data:
-                print(f"❌ Could not fetch data for {artist_config['artist']}")
-                continue
-            
-            # Get tracks
-            tracks = self.get_artist_tracks(artist_data['id'])
-            
-            # Enrich tracks with YouTube and Apple Music data
-            for track in tracks:
-                print(f"  🎵 Processing: {track['title']}")
-                
-                # YouTube
-                youtube_data = self.search_youtube_video(
-                    track['title'],
-                    artist_data['name']
-                )
-                if youtube_data:
-                    track['youtubeUrl'] = youtube_data['url']
-                    track['youtubeViews'] = youtube_data['views']
-                else:
-                    track['youtubeUrl'] = None
-                    track['youtubeViews'] = 0
-                
-                # Apple Music
-                apple_url = self.search_apple_music(
-                    track['title'],
-                    artist_data['name']
-                )
-                track['appleMusicUrl'] = apple_url
-                
-                # Audiomack (use artist's base URL + track slug)
-                if 'audiomack' in artist_config:
-                    track_slug = track['title'].lower().replace(' ', '-')
-                    track['audiomackUrl'] = f"{artist_config['audiomack']}/song/{track_slug}"
-                else:
-                    track['audiomackUrl'] = None
-            
-            artists_data.append({
-                'id': artist_data['id'],
-                'name': artist_data['name'],
-                'image': artist_data['image'],
-                'spotify': artist_config['spotify'],
-                'youtube': artist_config.get('youtube'),
-                'appleMusic': artist_config.get('appleMusic'),
-                'audiomack': artist_config.get('audiomack'),
-                'tracks': tracks
-            })
-            
-            print(f"✅ Processed {len(tracks)} tracks for {artist_data['name']}")
-        
-        # Generate cache file
-        cache_data = {
-            'lastUpdated': datetime.utcnow().isoformat() + 'Z',
-            'artists': artists_data
+        headers = {
+            'Authorization': f'Basic {auth_base64}',
+            'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        # Save to cache.json
-        os.makedirs('data', exist_ok=True)
-        with open('data/cache.json', 'w') as f:
-            json.dump(cache_data, f, indent=2)
+        data = {'grant_type': 'client_credentials'}
         
-        print(f"\n✨ Successfully updated data for {len(artists_data)} artists")
-        print(f"📝 Cache saved to data/cache.json")
-
-def main():
-    """Main execution function"""
-    updater = ArtistDataUpdater()
-    updater.update_all_artists()
+        response = requests.post(
+            'https://accounts.spotify.com/api/token',
+            headers=headers,
+            data=data
+        )
+        
+        if response.status_code == 200:
+            self.spotify_token = response.json()['access_token']
+            return self.spotify_token
+        
+        print(f"❌ Failed to get Spotify token: {response.status_code}")
+        return None
+    
+    def extract_spotify_id(self, url: str) -> Optional[str]:
+        """Extract artist ID from Spotify URL"""
+        match = re.search(r'artist/([a-zA-Z0-9]+)', url)
+        return match.group(1) if match else None
+    
+    def fetch_spotify_artist(self, artist_id: str) -> Optional[Dict]:
+        """Fetch artist data from Spotify"""
+        if not self.spotify_token:
+            return None
+        
+        headers = {'Authorization': f'Bearer {self.spotify_token}'}
+        
+        # Get artist info
+        artist_response = requests.get(
+            f'https://api.spotify.com/v1/artists/{artist_id}',
+            headers=headers
+        )
+        
+        if artist_response.status_code != 200:
+            print(f"❌ Failed to fetch artist {artist_id}")
+            return None
+        
+        artist_data = artist_response.json()
+        
+        # Get artist's albums (latest releases)
+        albums_response = requests.get(
+            f'https://api.spotify.com/v1/artists/{artist_id}/albums',
+            headers=headers,
+            params={
+                'include_groups': 'single,album',
+                'limit': 20,
+                'market': 'US'
+            }
+        )
+        
+        albums = albums_response.json().get('items', []) if albums_response.status_code == 200 else []
+        
+        # Get top tracks
+        top_tracks_response = requests.get(
+            f'https://api.spotify.com/v1/artists/{artist_id}/top-tracks',
+            headers=headers,
+            params={'market': 'US'}
+        )
+        
+        top_tracks = top_tracks_response.json().get('tracks', []) if top_tracks_response.status_code == 200 else []
+        
+        return {
+            'id': artist_id,
+            'name': artist_data['name'],
+            'imageUrl': artist_data['images'][0]['url'] if artist_data['images'] else None,
+            'albums': albums,
+            'topTracks': top_tracks
+        }
+    
+    def fetch_youtube_data(self, track_name: str, artist_name: str) -> Optional[Dict]:
+        """Fetch YouTube video data for a track"""
+        if not self.youtube_api_key:
+            return None
+        
+        search_query = f"{artist_name} {track_name} official"
+        
+        params = {
+            'part': 'snippet',
+            'q': search_query,
+            'type': 'video',
+            'maxResults': 1,
+            'key': self.youtube_api_key
+        }
+        
+        try:
+            response = requests.get(
+                'https://www.googleapis.com/youtube/v3/search',
+                params=params
+            )
+            
+            if response.status_code == 200:
+                items = response.json().get('items', [])
+                if items:
+                    video_id = items[0]['id']['videoId']
+                    
+                    # Get video statistics
+                    stats_response = requests.get(
+                        'https://www.googleapis.com/youtube/v3/videos',
+                        params={
+                            'part': 'statistics',
+                            'id': video_id,
+                            'key': self.youtube_api_key
+                        }
+                    )
+                    
+                    if stats_response.status_code == 200:
+                        stats = stats_response.json()['items'][0]['statistics']
+                        return {
+                            'url': f"https://www.youtube.com/watch?v={video_id}",
+                            'views': int(stats.get('viewCount', 0))
+                        }
+        except Exception as e:
+            print(f"⚠️  YouTube API error: {e}")
+        
+        return None
+    
+    def generate_apple_music_url(self, artist_name: str, track_name: str) -> str:
+        """Generate Apple Music search URL"""
+        query = f"{artist_name} {track_name}".replace(' ', '+')
+        return f"https://music.apple.com/us/search?term={query}"
+    
+    def process_artists(self) -> Dict:
+        """Process all artists and generate cache data"""
+        print("🎵 Starting A-lex Artist Hub automation...")
+        
+        if not self.get_spotify_token():
+            print("❌ Cannot proceed without Spotify token")
+            return self.generate_empty_cache()
+        
+        print("✅ Spotify token obtained")
+        
+        all_artists = []
+        all_tracks = []
+        
+        for artist_config in self.config['artists']:
+            print(f"\n🎤 Processing: {artist_config['name']}")
+            
+            spotify_id = self.extract_spotify_id(artist_config.get('spotify', ''))
+            if not spotify_id:
+                print(f"  ⚠️  No valid Spotify URL, skipping")
+                continue
+            
+            # Fetch Spotify data
+            artist_data = self.fetch_spotify_artist(spotify_id)
+            if not artist_data:
+                continue
+            
+            print(f"  ✅ Fetched Spotify data")
+            
+            # Process latest releases
+            latest_releases = []
+            for album in artist_data['albums'][:self.config['config']['latestReleasesPerArtist']]:
+                release = {
+                    'title': album['name'],
+                    'releaseDate': album['release_date'],
+                    'spotifyUrl': album['external_urls']['spotify']
+                }
+                
+                # Try to find YouTube video
+                youtube_data = self.fetch_youtube_data(album['name'], artist_data['name'])
+                
+                if youtube_data:
+                    release['youtubeUrl'] = youtube_data['url']
+                
+                release['appleMusicUrl'] = self.generate_apple_music_url(
+                    artist_data['name'], 
+                    album['name']
+                )
+                
+                if artist_config.get('audiomack'):
+                    release['audiomackUrl'] = artist_config['audiomack']
+                
+                latest_releases.append(release)
+            
+            # Process top tracks for global ranking
+            for track in artist_data['topTracks']:
+                track_data = {
+                    'id': track['id'],
+                    'title': track['name'],
+                    'artist': artist_data['name'],
+                    'coverUrl': track['album']['images'][0]['url'] if track['album']['images'] else None,
+                    'popularity': track['popularity'],
+                    'spotifyUrl': track['external_urls']['spotify'],
+                    'score': 0
+                }
+                
+                # Fetch YouTube data
+                youtube_data = self.fetch_youtube_data(track['name'], artist_data['name'])
+                
+                if youtube_data:
+                    track_data['youtubeUrl'] = youtube_data['url']
+                    track_data['youtubeViews'] = youtube_data['views']
+                    
+                    # Calculate combined score
+                    spotify_score = track['popularity'] * self.config['config']['spotifyWeight']
+                    youtube_score = min(100, youtube_data['views'] / 100000) * self.config['config']['youtubeWeight']
+                    track_data['score'] = spotify_score + youtube_score
+                else:
+                    track_data['score'] = track['popularity'] * self.config['config']['spotifyWeight']
+                
+                track_data['appleMusicUrl'] = self.generate_apple_music_url(
+                    artist_data['name'],
+                    track['name']
+                )
+                
+                if artist_config.get('audiomack'):
+                    track_data['audiomackUrl'] = artist_config['audiomack']
+                
+                all_tracks.append(track_data)
+            
+            # Add to artists list
+            all_artists.append({
+                'id': artist_data['id'],
+                'name': artist_data['name'],
+                'imageUrl': artist_data['imageUrl'],
+                'latestReleases': latest_releases
+            })
+            
+            print(f"  ✅ Processed {len(latest_releases)} releases")
+        
+        # Sort tracks by score and get top N
+        all_tracks.sort(key=lambda x: x['score'], reverse=True)
+        top_songs = all_tracks[:self.config['config']['topSongsCount']]
+        
+        # Generate cache
+        cache = {
+            'lastUpdated': datetime.utcnow().isoformat() + 'Z',
+            'topSongs': top_songs,
+            'artists': all_artists
+        }
+        
+        print(f"\n✅ Generated cache with {len(top_songs)} top songs and {len(all_artists)} artists")
+        
+        return cache
+    
+    def generate_empty_cache(self) -> Dict:
+        """Generate empty cache structure"""
+        return {
+            'lastUpdated': datetime.utcnow().isoformat() + 'Z',
+            'topSongs': [],
+            'artists': []
+        }
+    
+    def save_cache(self, cache: Dict):
+        """Save cache to file"""
+        os.makedirs('data', exist_ok=True)
+        
+        with open('data/cache.json', 'w') as f:
+            json.dump(cache, f, indent=2)
+        
+        print(f"💾 Cache saved to data/cache.json")
+    
+    def run(self):
+        """Main execution"""
+        cache = self.process_artists()
+        self.save_cache(cache)
+        print("\n🔥 Automation complete!")
 
 if __name__ == '__main__':
-    main()
+    automation = ArtistHubAutomation()
+    automation.run()
